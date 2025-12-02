@@ -1,0 +1,7 @@
+node_modules/
+exported_files/
+*.log
+.DS_Store
+
+htmls
+out
