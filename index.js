@@ -2,6 +2,52 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 
+// ============================================================================
+// Configuration switches for debugging
+// Set these variables to true/false to enable/disable features
+// ============================================================================
+
+// Network interception
+const INTERCEPT_REQUEST = true;
+const INTERCEPT_RESPONSE = true;
+
+// API interception
+const INTERCEPT_FETCH = true;
+const INTERCEPT_XHR = true;
+
+// WebAudio interception
+const INTERCEPT_AUDIO_CONTEXT = true;
+const INTERCEPT_DECODE_AUDIO_DATA = true;
+const INTERCEPT_CREATE_BUFFER = true;
+const INTERCEPT_CREATE_BUFFER_SOURCE = true;
+const INTERCEPT_CREATE_SCRIPT_PROCESSOR = true;
+const INTERCEPT_OFFLINE_AUDIO_CONTEXT = true;
+
+// DOM monitoring
+const USE_MUTATION_OBSERVER = true;
+
+// Periodic scanning
+const ENABLE_PERIODIC_SCAN = true;
+
+// Configuration object (for easier access)
+const config = {
+  interceptRequest: INTERCEPT_REQUEST,
+  interceptResponse: INTERCEPT_RESPONSE,
+  interceptFetch: INTERCEPT_FETCH,
+  interceptXHR: INTERCEPT_XHR,
+  interceptAudioContext: INTERCEPT_AUDIO_CONTEXT,
+  interceptDecodeAudioData: INTERCEPT_DECODE_AUDIO_DATA,
+  interceptCreateBuffer: INTERCEPT_CREATE_BUFFER,
+  interceptCreateBufferSource: INTERCEPT_CREATE_BUFFER_SOURCE,
+  interceptCreateScriptProcessor: INTERCEPT_CREATE_SCRIPT_PROCESSOR,
+  interceptOfflineAudioContext: INTERCEPT_OFFLINE_AUDIO_CONTEXT,
+  useMutationObserver: USE_MUTATION_OBSERVER,
+  enablePeriodicScan: ENABLE_PERIODIC_SCAN,
+};
+
+// Check if any feature is enabled
+const hasAnyFeatureEnabled = Object.values(config).some(v => v === true);
+
 // Create output directory
 const outputDir = path.join(__dirname, 'exported_files');
 if (!fs.existsSync(outputDir)) {
@@ -236,6 +282,27 @@ async function main() {
   console.log(`Accessing URL: ${url}`);
   console.log(`Files will be saved to: ${outputDir}\n`);
   
+  // Display configuration
+  console.log('Configuration:');
+  console.log('  Network:');
+  console.log(`    - Request interception: ${config.interceptRequest ? '✓' : '✗'}`);
+  console.log(`    - Response interception: ${config.interceptResponse ? '✓' : '✗'}`);
+  console.log('  API Interception:');
+  console.log(`    - Fetch: ${config.interceptFetch ? '✓' : '✗'}`);
+  console.log(`    - XMLHttpRequest: ${config.interceptXHR ? '✓' : '✗'}`);
+  console.log('  WebAudio:');
+  console.log(`    - AudioContext: ${config.interceptAudioContext ? '✓' : '✗'}`);
+  console.log(`    - decodeAudioData: ${config.interceptDecodeAudioData ? '✓' : '✗'}`);
+  console.log(`    - createBuffer: ${config.interceptCreateBuffer ? '✓' : '✗'}`);
+  console.log(`    - createBufferSource: ${config.interceptCreateBufferSource ? '✓' : '✗'}`);
+  console.log(`    - createScriptProcessor: ${config.interceptCreateScriptProcessor ? '✓' : '✗'}`);
+  console.log(`    - OfflineAudioContext: ${config.interceptOfflineAudioContext ? '✓' : '✗'}`);
+  console.log('  DOM Monitoring:');
+  console.log(`    - MutationObserver: ${config.useMutationObserver ? '✓' : '✗'}`);
+  console.log('  Scanning:');
+  console.log(`    - Periodic scan: ${config.enablePeriodicScan ? '✓' : '✗'}`);
+  console.log('');
+  
   const browser = await puppeteer.launch({
     headless: false,
     args: ['--disable-web-security', '--disable-features=IsolateOrigins,site-per-process']
@@ -261,39 +328,53 @@ async function main() {
   }
   
   // Listen to network requests
-  page.on('request', async (request) => {
-    const url = request.url();
-    const dataURI = extractDataURI(url);
-    if (dataURI) {
-      await processDataURI(dataURI);
-    }
-  });
+  if (config.interceptRequest) {
+    page.on('request', async (request) => {
+      const url = request.url();
+      const dataURI = extractDataURI(url);
+      if (dataURI) {
+        await processDataURI(dataURI);
+      }
+    });
+  }
   
   // Listen to data URI in responses
-  page.on('response', async (response) => {
-    const url = response.url();
-    const dataURI = extractDataURI(url);
-    if (dataURI) {
-      await processDataURI(dataURI);
-    }
-  });
+  if (config.interceptResponse) {
+    page.on('response', async (response) => {
+      const url = response.url();
+      const dataURI = extractDataURI(url);
+      if (dataURI) {
+        await processDataURI(dataURI);
+      }
+    });
+  }
   
   // Execute page script to find all data URIs and monitor DOM changes and WebAudio
-  await page.evaluateOnNewDocument(() => {
-    // Store detected data URIs
-    window.__detectedDataURIs = new Set();
-    // Store detected audio buffers
-    window.__detectedAudioBuffers = new Set();
-    
-    // Function to detect data URI
-    function detectDataURI(url) {
-      if (typeof url === 'string' && url.startsWith('data:')) {
-        if (!window.__detectedDataURIs.has(url)) {
-          window.__detectedDataURIs.add(url);
-          window.__onDataURIDetected?.(url);
+  // Only inject script if at least one feature is enabled
+  if (hasAnyFeatureEnabled) {
+    await page.evaluateOnNewDocument((config) => {
+      try {
+        // Store configuration
+        window.__exporterConfig = config;
+        
+        // Store detected data URIs
+        window.__detectedDataURIs = new Set();
+        // Store detected audio buffers
+        window.__detectedAudioBuffers = new Set();
+      
+      // Function to detect data URI
+      function detectDataURI(url) {
+        try {
+          if (typeof url === 'string' && url.startsWith('data:')) {
+            if (!window.__detectedDataURIs.has(url)) {
+              window.__detectedDataURIs.add(url);
+              window.__onDataURIDetected?.(url);
+            }
+          }
+        } catch (e) {
+          console.error('[DataURI Exporter] detectDataURI error:', e);
         }
       }
-    }
     
     // Function to detect audio buffer
     function detectAudioBuffer(audioBuffer) {
@@ -328,266 +409,424 @@ async function main() {
     
     // Intercept AudioContext methods (needs to be defined externally for reuse)
     function interceptAudioContext(context) {
-        // Intercept decodeAudioData
-        const originalDecodeAudioData = context.decodeAudioData.bind(context);
-        context.decodeAudioData = function(arrayBuffer) {
-          return originalDecodeAudioData(arrayBuffer).then((audioBuffer) => {
-            detectAudioBuffer(audioBuffer);
-            return audioBuffer;
-          }).catch((error) => {
-            return Promise.reject(error);
-          });
-        };
-        
-        // Intercept createBuffer
-        const originalCreateBuffer = context.createBuffer.bind(context);
-        context.createBuffer = function(...args) {
-          const buffer = originalCreateBuffer(...args);
-          detectAudioBuffer(buffer);
-          return buffer;
-        };
-        
-        // Intercept createBufferSource
-        const originalCreateBufferSource = context.createBufferSource?.bind(context);
-        if (originalCreateBufferSource) {
-          context.createBufferSource = function() {
-            const source = originalCreateBufferSource();
-            
-            // Monitor buffer property setting
-            let bufferValue = null;
-            Object.defineProperty(source, 'buffer', {
-              get: function() {
-                return bufferValue;
-              },
-              set: function(value) {
-                bufferValue = value;
-                if (value) {
-                  detectAudioBuffer(value);
-                }
-              },
-              configurable: true,
-              enumerable: true
-            });
-            
-            // Intercept start method
-            const originalStart = source.start?.bind(source);
-            if (originalStart) {
-              source.start = function(...args) {
-                if (bufferValue) {
-                  detectAudioBuffer(bufferValue);
-                }
-                return originalStart(...args);
+        try {
+          if (!context) return;
+          
+          // Intercept decodeAudioData
+          if (window.__exporterConfig.interceptDecodeAudioData && context.decodeAudioData && typeof context.decodeAudioData === 'function') {
+            try {
+              const originalDecodeAudioData = context.decodeAudioData.bind(context);
+              context.decodeAudioData = function(arrayBuffer) {
+                return originalDecodeAudioData(arrayBuffer).then((audioBuffer) => {
+                  try {
+                    detectAudioBuffer(audioBuffer);
+                  } catch (e) {
+                    console.error('[DataURI Exporter] detectAudioBuffer in decodeAudioData error:', e);
+                  }
+                  return audioBuffer;
+                }).catch((error) => {
+                  return Promise.reject(error);
+                });
               };
+            } catch (e) {
+              console.error('[DataURI Exporter] Failed to intercept decodeAudioData:', e);
             }
-            
-            return source;
-          };
-        }
-        
-        // Monitor createScriptProcessor (deprecated but may still be used)
-        const originalCreateScriptProcessor = context.createScriptProcessor?.bind(context);
-        if (originalCreateScriptProcessor) {
-          context.createScriptProcessor = function(...args) {
-            const processor = originalCreateScriptProcessor(...args);
-            
-            // Monitor onaudioprocess event
-            const originalOnaudioprocess = processor.onaudioprocess;
-            processor.onaudioprocess = function(event) {
-              if (event.inputBuffer) {
-                detectAudioBuffer(event.inputBuffer);
-              }
-              if (originalOnaudioprocess) {
-                originalOnaudioprocess.call(this, event);
-              }
-            };
-            
-            return processor;
-          };
-        }
-        
-        // Monitor createAnalyser
-        const originalCreateAnalyser = context.createAnalyser?.bind(context);
-        if (originalCreateAnalyser) {
-          context.createAnalyser = function() {
-            const analyser = originalCreateAnalyser();
-            
-            // Try to get audio data from analyser (if possible)
-            const originalGetFloatTimeDomainData = analyser.getFloatTimeDomainData?.bind(analyser);
-            if (originalGetFloatTimeDomainData) {
-              analyser.getFloatTimeDomainData = function(array) {
-                originalGetFloatTimeDomainData(array);
-                // Note: This can only get analysis data, not the original audio buffer
+          }
+          
+          // Intercept createBuffer
+          if (window.__exporterConfig.interceptCreateBuffer && context.createBuffer && typeof context.createBuffer === 'function') {
+            try {
+              const originalCreateBuffer = context.createBuffer.bind(context);
+              context.createBuffer = function(...args) {
+                const buffer = originalCreateBuffer(...args);
+                try {
+                  detectAudioBuffer(buffer);
+                } catch (e) {
+                  console.error('[DataURI Exporter] detectAudioBuffer in createBuffer error:', e);
+                }
+                return buffer;
               };
+            } catch (e) {
+              console.error('[DataURI Exporter] Failed to intercept createBuffer:', e);
             }
-            
-            return analyser;
-          };
+          }
+          
+          // Intercept createBufferSource
+          if (window.__exporterConfig.interceptCreateBufferSource && context.createBufferSource && typeof context.createBufferSource === 'function') {
+            try {
+              const originalCreateBufferSource = context.createBufferSource.bind(context);
+              context.createBufferSource = function() {
+                const source = originalCreateBufferSource();
+                
+                try {
+                  // Monitor buffer property setting
+                  let bufferValue = null;
+                  Object.defineProperty(source, 'buffer', {
+                    get: function() {
+                      return bufferValue;
+                    },
+                    set: function(value) {
+                      bufferValue = value;
+                      try {
+                        if (value) {
+                          detectAudioBuffer(value);
+                        }
+                      } catch (e) {
+                        console.error('[DataURI Exporter] detectAudioBuffer in buffer setter error:', e);
+                      }
+                    },
+                    configurable: true,
+                    enumerable: true
+                  });
+                  
+                  // Intercept start method
+                  if (source.start && typeof source.start === 'function') {
+                    const originalStart = source.start.bind(source);
+                    source.start = function(...args) {
+                      try {
+                        if (bufferValue) {
+                          detectAudioBuffer(bufferValue);
+                        }
+                      } catch (e) {
+                        console.error('[DataURI Exporter] detectAudioBuffer in start error:', e);
+                      }
+                      return originalStart(...args);
+                    };
+                  }
+                } catch (e) {
+                  console.error('[DataURI Exporter] Failed to intercept createBufferSource property:', e);
+                }
+                
+                return source;
+              };
+            } catch (e) {
+              console.error('[DataURI Exporter] Failed to intercept createBufferSource:', e);
+            }
+          }
+          
+          // Monitor createScriptProcessor (deprecated but may still be used)
+          if (window.__exporterConfig.interceptCreateScriptProcessor && context.createScriptProcessor && typeof context.createScriptProcessor === 'function') {
+            try {
+              const originalCreateScriptProcessor = context.createScriptProcessor.bind(context);
+              context.createScriptProcessor = function(...args) {
+                const processor = originalCreateScriptProcessor(...args);
+                
+                try {
+                  // Monitor onaudioprocess event
+                  const originalOnaudioprocess = processor.onaudioprocess;
+                  processor.onaudioprocess = function(event) {
+                    try {
+                      if (event && event.inputBuffer) {
+                        detectAudioBuffer(event.inputBuffer);
+                      }
+                    } catch (e) {
+                      console.error('[DataURI Exporter] detectAudioBuffer in onaudioprocess error:', e);
+                    }
+                    if (originalOnaudioprocess) {
+                      originalOnaudioprocess.call(this, event);
+                    }
+                  };
+                } catch (e) {
+                  console.error('[DataURI Exporter] Failed to intercept onaudioprocess:', e);
+                }
+                
+                return processor;
+              };
+            } catch (e) {
+              console.error('[DataURI Exporter] Failed to intercept createScriptProcessor:', e);
+            }
+          }
+        } catch (e) {
+          console.error('[DataURI Exporter] interceptAudioContext error:', e);
         }
     }
     
     // Intercept WebAudio API
-    if (window.AudioContext || window.webkitAudioContext) {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      const OriginalAudioContext = AudioContextClass;
-      
-      // Override AudioContext constructor
-      window.AudioContext = function(...args) {
-        const context = new OriginalAudioContext(...args);
-        interceptAudioContext(context);
-        return context;
-      };
-      
-      window.webkitAudioContext = window.AudioContext;
-      
-      // Intercept OfflineAudioContext
-      if (window.OfflineAudioContext || window.webkitOfflineAudioContext) {
-        const OfflineAudioContextClass = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-        const OriginalOfflineAudioContext = OfflineAudioContextClass;
+    try {
+      if (window.__exporterConfig.interceptAudioContext && (window.AudioContext || window.webkitAudioContext)) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        const OriginalAudioContext = AudioContextClass;
         
-        window.OfflineAudioContext = function(...args) {
-          const context = new OriginalOfflineAudioContext(...args);
-          interceptAudioContext(context);
-          
-          // Intercept startRendering
-          const originalStartRendering = context.startRendering?.bind(context);
-          if (originalStartRendering) {
-            context.startRendering = function() {
-              return originalStartRendering().then((audioBuffer) => {
-                detectAudioBuffer(audioBuffer);
-                return audioBuffer;
-              });
-            };
+        // Override AudioContext constructor
+        window.AudioContext = function(...args) {
+          try {
+            const context = new OriginalAudioContext(...args);
+            interceptAudioContext(context);
+            return context;
+          } catch (e) {
+            console.error('[DataURI Exporter] AudioContext constructor interception failed:', e);
+            // If interception fails, return original context
+            return new OriginalAudioContext(...args);
           }
-          
-          return context;
         };
         
-        window.webkitOfflineAudioContext = window.OfflineAudioContext;
+        // Copy prototype and static properties
+        try {
+          Object.setPrototypeOf(window.AudioContext, OriginalAudioContext);
+          Object.setPrototypeOf(window.AudioContext.prototype, OriginalAudioContext.prototype);
+          Object.keys(OriginalAudioContext).forEach(key => {
+            if (!(key in window.AudioContext)) {
+              window.AudioContext[key] = OriginalAudioContext[key];
+            }
+          });
+        } catch (e) {
+          console.error('[DataURI Exporter] Failed to copy AudioContext prototype:', e);
+        }
+        
+        window.webkitAudioContext = window.AudioContext;
+        
+        // Intercept OfflineAudioContext
+        if (window.__exporterConfig.interceptOfflineAudioContext && (window.OfflineAudioContext || window.webkitOfflineAudioContext)) {
+          const OfflineAudioContextClass = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+          const OriginalOfflineAudioContext = OfflineAudioContextClass;
+          
+          window.OfflineAudioContext = function(...args) {
+            try {
+              const context = new OriginalOfflineAudioContext(...args);
+              interceptAudioContext(context);
+              
+              // Intercept startRendering
+              if (context.startRendering && typeof context.startRendering === 'function') {
+                try {
+                  const originalStartRendering = context.startRendering.bind(context);
+                  context.startRendering = function() {
+                    return originalStartRendering().then((audioBuffer) => {
+                      try {
+                        detectAudioBuffer(audioBuffer);
+                      } catch (e) {
+                        console.error('[DataURI Exporter] detectAudioBuffer in startRendering error:', e);
+                      }
+                      return audioBuffer;
+                    });
+                  };
+                } catch (e) {
+                  console.error('[DataURI Exporter] Failed to intercept startRendering:', e);
+                }
+              }
+              
+              return context;
+            } catch (e) {
+              console.error('[DataURI Exporter] OfflineAudioContext constructor interception failed:', e);
+              // If interception fails, return original context
+              return new OriginalOfflineAudioContext(...args);
+            }
+          };
+          
+          // Copy prototype and static properties
+          try {
+            Object.setPrototypeOf(window.OfflineAudioContext, OriginalOfflineAudioContext);
+            Object.setPrototypeOf(window.OfflineAudioContext.prototype, OriginalOfflineAudioContext.prototype);
+            Object.keys(OriginalOfflineAudioContext).forEach(key => {
+              if (!(key in window.OfflineAudioContext)) {
+                window.OfflineAudioContext[key] = OriginalOfflineAudioContext[key];
+              }
+            });
+          } catch (e) {
+            console.error('[DataURI Exporter] Failed to copy OfflineAudioContext prototype:', e);
+          }
+          
+          window.webkitOfflineAudioContext = window.OfflineAudioContext;
+        }
       }
+    } catch (e) {
+      console.error('[DataURI Exporter] WebAudio API interception failed:', e);
     }
     
     // After page loads, try to intercept existing AudioContext
     function interceptExistingContexts() {
-      // Find all possible AudioContext instances
-      if (window.AudioContext || window.webkitAudioContext) {
-        // Try to find AudioContext instances from global variables
-        for (const key in window) {
-          try {
-            const value = window[key];
-            if (value && typeof value === 'object') {
-              // Check if it's an AudioContext instance
-              if (value.constructor && (
-                value.constructor.name === 'AudioContext' ||
-                value.constructor.name === 'webkitAudioContext'
-              )) {
-                interceptAudioContext(value);
+      try {
+        // Find all possible AudioContext instances
+        if (window.AudioContext || window.webkitAudioContext) {
+          // Try to find AudioContext instances from global variables
+          for (const key in window) {
+            try {
+              const value = window[key];
+              if (value && typeof value === 'object') {
+                // Check if it's an AudioContext instance
+                if (value.constructor && (
+                  value.constructor.name === 'AudioContext' ||
+                  value.constructor.name === 'webkitAudioContext'
+                )) {
+                  interceptAudioContext(value);
+                }
               }
+            } catch (e) {
+              console.error('[DataURI Exporter] Failed to access window property:', key, e);
             }
-          } catch (e) {
-            // Ignore access errors
           }
         }
+      } catch (e) {
+        console.error('[DataURI Exporter] interceptExistingContexts error:', e);
       }
     }
     
     // Try to intercept after DOM loads
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', interceptExistingContexts);
-    } else {
-      interceptExistingContexts();
+    try {
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', interceptExistingContexts);
+      } else {
+        interceptExistingContexts();
+      }
+      
+      // Delay execution to ensure page scripts have run
+      setTimeout(interceptExistingContexts, 1000);
+    } catch (e) {
+      console.error('[DataURI Exporter] Failed to setup interceptExistingContexts:', e);
     }
-    
-    // Delay execution to ensure page scripts have run
-    setTimeout(interceptExistingContexts, 1000);
     
     // Intercept fetch
-    const originalFetch = window.fetch;
-    window.fetch = function(...args) {
-      const url = args[0];
-      detectDataURI(url);
-      return originalFetch.apply(this, args);
-    };
+    try {
+      if (window.__exporterConfig.interceptFetch && window.fetch && typeof window.fetch === 'function') {
+        const originalFetch = window.fetch;
+        window.fetch = function(...args) {
+          try {
+            const url = args[0];
+            detectDataURI(url);
+          } catch (e) {
+            console.error('[DataURI Exporter] detectDataURI in fetch error:', e);
+          }
+          return originalFetch.apply(this, args);
+        };
+      }
+    } catch (e) {
+      console.error('[DataURI Exporter] Failed to intercept fetch:', e);
+    }
     
     // Intercept XMLHttpRequest
-    const originalOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-      detectDataURI(url);
-      return originalOpen.apply(this, [method, url, ...rest]);
-    };
+    try {
+      if (window.__exporterConfig.interceptXHR && XMLHttpRequest && XMLHttpRequest.prototype && XMLHttpRequest.prototype.open) {
+        const originalOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+          try {
+            detectDataURI(url);
+          } catch (e) {
+            console.error('[DataURI Exporter] detectDataURI in XMLHttpRequest error:', e);
+          }
+          return originalOpen.apply(this, [method, url, ...rest]);
+        };
+      }
+    } catch (e) {
+      console.error('[DataURI Exporter] Failed to intercept XMLHttpRequest:', e);
+    }
     
     // Use MutationObserver to monitor DOM changes
-    const observer = new MutationObserver((mutations) => {
-      mutations.forEach((mutation) => {
-        mutation.addedNodes.forEach((node) => {
-          if (node.nodeType === 1) { // Element node
-            // Check img src
-            if (node.tagName === 'IMG' && node.src && node.src.startsWith('data:')) {
-              detectDataURI(node.src);
+    let observer = null;
+    try {
+      if (window.__exporterConfig.useMutationObserver) {
+        observer = new MutationObserver((mutations) => {
+        try {
+          mutations.forEach((mutation) => {
+            try {
+              mutation.addedNodes.forEach((node) => {
+                try {
+                  if (node && node.nodeType === 1) { // Element node
+                    // Check img src
+                    if (node.tagName === 'IMG' && node.src && typeof node.src === 'string' && node.src.startsWith('data:')) {
+                      detectDataURI(node.src);
+                    }
+                    // Check style attribute
+                    if (node.style && node.style.backgroundImage) {
+                      const bgMatch = node.style.backgroundImage.match(/url\(['"]?(data:[^'"]+)['"]?\)/);
+                      if (bgMatch) detectDataURI(bgMatch[1]);
+                    }
+                    // Check inline style attribute
+                    const inlineStyle = node.getAttribute('style');
+                    if (inlineStyle) {
+                      const styleMatch = inlineStyle.match(/url\(['"]?(data:[^'"]+)['"]?\)/);
+                      if (styleMatch) detectDataURI(styleMatch[1]);
+                    }
+                    // Check child elements
+                    if (node.querySelectorAll) {
+                      try {
+                        const dataURIElements = node.querySelectorAll('[src^="data:"], [href^="data:"], [style*="data:"]');
+                        dataURIElements?.forEach((el) => {
+                          try {
+                            if (el.src) detectDataURI(el.src);
+                            if (el.href) detectDataURI(el.href);
+                            const style = el.getAttribute('style');
+                            if (style) {
+                              const match = style.match(/url\(['"]?(data:[^'"]+)['"]?\)/);
+                              if (match) detectDataURI(match[1]);
+                            }
+                          } catch (e) {
+                            console.error('[DataURI Exporter] Element processing error:', e);
+                          }
+                        });
+                      } catch (e) {
+                        console.error('[DataURI Exporter] querySelectorAll error:', e);
+                      }
+                    }
+                  }
+                } catch (e) {
+                  console.error('[DataURI Exporter] Node processing error:', e);
+                }
+              });
+            } catch (e) {
+              console.error('[DataURI Exporter] Mutation processing error:', e);
             }
-            // Check style attribute
-            if (node.style && node.style.backgroundImage) {
-              const bgMatch = node.style.backgroundImage.match(/url\(['"]?(data:[^'"]+)['"]?\)/);
-              if (bgMatch) detectDataURI(bgMatch[1]);
-            }
-            // Check inline style attribute
-            const inlineStyle = node.getAttribute('style');
-            if (inlineStyle) {
-              const styleMatch = inlineStyle.match(/url\(['"]?(data:[^'"]+)['"]?\)/);
-              if (styleMatch) detectDataURI(styleMatch[1]);
-            }
-            // Check child elements
-            const dataURIElements = node.querySelectorAll?.('[src^="data:"], [href^="data:"], [style*="data:"]');
-            dataURIElements?.forEach((el) => {
-              if (el.src) detectDataURI(el.src);
-              if (el.href) detectDataURI(el.href);
-              const style = el.getAttribute('style');
-              if (style) {
-                const match = style.match(/url\(['"]?(data:[^'"]+)['"]?\)/);
-                if (match) detectDataURI(match[1]);
-              }
-            });
-          }
-        });
+          });
+        } catch (e) {
+          console.error('[DataURI Exporter] Observer callback error:', e);
+        }
       });
-    });
-    
-    // Start observing
-    observer.observe(document.body || document.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['src', 'href', 'style']
-    });
-    
-    // Start observing after page loads
-    if (document.body) {
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['src', 'href', 'style']
-      });
-    } else {
-      document.addEventListener('DOMContentLoaded', () => {
-        observer.observe(document.body, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ['src', 'href', 'style']
-        });
-      });
+      }
+    } catch (e) {
+      console.error('[DataURI Exporter] Observer creation error:', e);
     }
-  });
+    
+    // Function to start observing
+    function startObserving() {
+      if (!observer) return;
+      try {
+        const targetNode = document.body || document.documentElement;
+        if (targetNode && targetNode.nodeType === 1) {
+          try {
+            observer.observe(targetNode, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ['src', 'href', 'style']
+            });
+          } catch (e) {
+            console.error('[DataURI Exporter] Observer.observe error:', e);
+          }
+        }
+      } catch (e) {
+        console.error('[DataURI Exporter] startObserving error:', e);
+      }
+    }
+    
+    // Start observing when DOM is ready
+    try {
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', startObserving);
+      } else {
+        // DOM already loaded
+        startObserving();
+      }
+      
+      // Also try after a short delay to ensure document.body exists
+      setTimeout(startObserving, 100);
+    } catch (e) {
+      console.error('[DataURI Exporter] Observer setup error:', e);
+    }
+    } catch (e) {
+      console.error('[DataURI Exporter] Script injection error:', e);
+    }
+    }, config);
+  }
   
   // Set callback function to receive detected data URIs from page
-  await page.exposeFunction('__onDataURIDetected', async (dataURI) => {
-    await processDataURI(dataURI);
-  });
-  
-  // Set callback function to receive detected audio buffers from page
-  await page.exposeFunction('__onAudioBufferDetected', async (audioBufferData) => {
-    saveAudioBuffer(audioBufferData, ++fileIndex);
-  });
+  if (hasAnyFeatureEnabled) {
+    await page.exposeFunction('__onDataURIDetected', async (dataURI) => {
+      await processDataURI(dataURI);
+    });
+    
+    // Set callback function to receive detected audio buffers from page
+    await page.exposeFunction('__onAudioBufferDetected', async (audioBufferData) => {
+      saveAudioBuffer(audioBufferData, ++fileIndex);
+    });
+  }
   
   // Function to scan all data URIs in the page
   async function scanPageForDataURIs() {
@@ -614,7 +853,7 @@ async function main() {
             }
           });
         } catch (e) {
-          // Cross-origin stylesheets may not be accessible
+          console.error('[DataURI Exporter] Cannot access stylesheet (cross-origin?):', e);
         }
       });
       
@@ -642,22 +881,9 @@ async function main() {
         results.push(media.src);
       });
       
-      // Find all canvas converted to data URI (by checking if canvas.toDataURL is called)
-      document.querySelectorAll('canvas').forEach((canvas) => {
-        try {
-          // Check if canvas is converted to data URI (by checking if there's a data URL attribute)
-          const context = canvas.getContext('2d');
-          if (context) {
-            // If canvas has content, try to get data URL
-            const dataURL = canvas.toDataURL?.();
-            if (dataURL && dataURL.startsWith('data:')) {
-              results.push(dataURL);
-            }
-          }
-        } catch (e) {
-          // Ignore errors
-        }
-      });
+      // Note: Canvas scanning is disabled to avoid interfering with WebGL/WebGPU contexts
+      // Calling getContext('2d') or toDataURL() on WebGL canvases can break the WebGL context
+      // If you need to capture canvas images, use the network interception or API interception instead
       
       return results;
     });
@@ -665,24 +891,33 @@ async function main() {
     // Process found data URIs
     let newCount = 0;
     for (const dataURI of dataURIs) {
-      const saved = await processDataURI(dataURI);
-      if (saved) newCount++;
+      try {
+        const saved = await processDataURI(dataURI);
+        if (saved) newCount++;
+      } catch (e) {
+        console.error('[DataURI Exporter] Error processing data URI:', e);
+      }
     }
     
     return { total: dataURIs.length, new: newCount };
   }
   
   // After page loads, find all elements containing data URI
-  page.on('load', async () => {
-    console.log('\nPage loaded, scanning for data URIs...\n');
-    const result = await scanPageForDataURIs();
-    console.log(`Scan complete: found ${result.total} data URIs, ${result.new} new\n`);
-  });
+  if (hasAnyFeatureEnabled) {
+    page.on('load', async () => {
+      console.log('\nPage loaded, scanning for data URIs...\n');
+      const result = await scanPageForDataURIs();
+      console.log(`Scan complete: found ${result.total} data URIs, ${result.new} new\n`);
+    });
+  }
   
   // Periodically scan page (to capture dynamically loaded resources)
   let scanInterval = null;
   
   function startPeriodicScan(intervalMs = 3000) {
+    if (!config.enablePeriodicScan) {
+      return;
+    }
     if (scanInterval) {
       clearInterval(scanInterval);
     }
@@ -693,7 +928,7 @@ async function main() {
           console.log(`[Periodic Scan] Found ${result.new} new data URIs`);
         }
       } catch (error) {
-        // Ignore scan errors (page may be changing)
+        console.error('[DataURI Exporter] Periodic scan error:', error);
       }
     }, intervalMs);
   }
@@ -719,7 +954,9 @@ async function main() {
   console.log('═══════════════════════════════════════════════════\n');
   
   // Start periodic scanning
-  startPeriodicScan(2000); // Scan every 2 seconds
+  if (hasAnyFeatureEnabled) {
+    startPeriodicScan(2000); // Scan every 2 seconds
+  }
   
   // Provide interactive commands
   console.log('Available commands:');
@@ -751,7 +988,7 @@ async function main() {
         await browser.close();
       }
     } catch (error) {
-      // Ignore close errors
+      console.error('[DataURI Exporter] Browser close error:', error);
     }
   }
   
@@ -767,12 +1004,16 @@ async function main() {
       case '':
       case 'scan':
         if (browser.isConnected()) {
-          console.log('\nScanning page...');
-          try {
-            const result = await scanPageForDataURIs();
-            console.log(`Scan complete: ${result.total} data URIs total, ${result.new} new\n`);
-          } catch (error) {
-            console.error(`Scan failed: ${error.message}\n`);
+          if (hasAnyFeatureEnabled) {
+            console.log('\nScanning page...');
+            try {
+              const result = await scanPageForDataURIs();
+              console.log(`Scan complete: ${result.total} data URIs total, ${result.new} new\n`);
+            } catch (error) {
+              console.error(`Scan failed: ${error.message}\n`);
+            }
+          } else {
+            console.log('All features are disabled. Enable at least one feature to use scanning.\n');
           }
         } else {
           console.log('Browser is closed, cannot scan\n');
@@ -786,8 +1027,12 @@ async function main() {
         
       case 'start':
         if (browser.isConnected()) {
-          startPeriodicScan(2000);
-          console.log('Periodic scanning started (every 2 seconds)\n');
+          if (hasAnyFeatureEnabled) {
+            startPeriodicScan(2000);
+            console.log('Periodic scanning started (every 2 seconds)\n');
+          } else {
+            console.log('All features are disabled. Enable at least one feature to use scanning.\n');
+          }
         } else {
           console.log('Browser is closed, cannot start scanning\n');
         }
