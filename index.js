@@ -7,27 +7,31 @@ const path = require('path');
 // Set these variables to true/false to enable/disable features
 // ============================================================================
 
+let isOpen = true;
 // Network interception
-const INTERCEPT_REQUEST = true;
-const INTERCEPT_RESPONSE = true;
+const INTERCEPT_REQUEST = isOpen;
+const INTERCEPT_RESPONSE = isOpen;
 
 // API interception
-const INTERCEPT_FETCH = true;
-const INTERCEPT_XHR = true;
+const INTERCEPT_FETCH = isOpen;
+const INTERCEPT_XHR = isOpen;
 
 // WebAudio interception
-const INTERCEPT_AUDIO_CONTEXT = true;
-const INTERCEPT_DECODE_AUDIO_DATA = true;
-const INTERCEPT_CREATE_BUFFER = true;
-const INTERCEPT_CREATE_BUFFER_SOURCE = true;
-const INTERCEPT_CREATE_SCRIPT_PROCESSOR = true;
-const INTERCEPT_OFFLINE_AUDIO_CONTEXT = true;
+const INTERCEPT_AUDIO_CONTEXT = false;
+//isOpen = true;
+const INTERCEPT_DECODE_AUDIO_DATA = isOpen;
+const INTERCEPT_CREATE_BUFFER = isOpen;
+const INTERCEPT_CREATE_BUFFER_SOURCE = isOpen;
+const INTERCEPT_CREATE_SCRIPT_PROCESSOR = isOpen;
+const INTERCEPT_OFFLINE_AUDIO_CONTEXT = isOpen;
+
+
 
 // DOM monitoring
-const USE_MUTATION_OBSERVER = true;
+const USE_MUTATION_OBSERVER = isOpen;
 
 // Periodic scanning
-const ENABLE_PERIODIC_SCAN = true;
+const ENABLE_PERIODIC_SCAN = isOpen;
 
 // Configuration object (for easier access)
 const config = {
@@ -85,6 +89,8 @@ const mimeToExtension = {
   'text/css': 'css',
   'application/javascript': 'js',
   'text/javascript': 'js',
+  'text/plain': 'txt',
+  'application/json': 'json',
 };
 
 // Parse data URI
@@ -107,6 +113,9 @@ function parseDataURI(dataURI) {
 
 // Get file extension from MIME type
 function getExtensionFromMime(mimeType) {
+  if (mimeType.startsWith('data:')) {
+    mimeType = mimeType.split(';')[0].replace('data:', '');
+  }
   return mimeToExtension[mimeType.toLowerCase()] || 'bin';
 }
 
@@ -165,6 +174,7 @@ function audioBufferToWAV(audioData) {
   
   return buffer;
 }
+var globalCounter = 0
 
 // Save file
 function saveFile(data, mimeType, index, dataURI = null) {
@@ -178,7 +188,7 @@ function saveFile(data, mimeType, index, dataURI = null) {
   }
   
   const extension = getExtensionFromMime(mimeType);
-  const filename = `file_${index}_${Date.now()}.${extension}`;
+  const filename = `file_${globalCounter++}.${extension}`;
   const filepath = path.join(outputDir, filename);
   
   fs.writeFileSync(filepath, data);
@@ -234,6 +244,45 @@ function extractDataURI(url) {
     return url;
   }
   return null;
+}
+
+// Check if URL is a blob URL
+function isBlobURL(url) {
+  return url.startsWith('blob:');
+}
+// Process blob URL - fetch and save the content
+async function processBlobURL(page, blobURL, index) {
+  try {
+    // Fetch the blob content
+    const response = await page.evaluate(async (url) => {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      
+      // Convert blob to base64
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          resolve({
+            data: reader.result.split(',')[1], // Remove data:type;base64, prefix
+            type: blob.type || 'application/octet-stream'
+          });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }, blobURL);
+    
+    if (response && response.data) {
+      const buffer = Buffer.from(response.data, 'base64');
+      const mimeType = response.type || 'application/octet-stream';
+      const result = saveFile(buffer, mimeType, ++index, blobURL);
+      return result !== null;
+    }
+    return false;
+  } catch (error) {
+    console.error(`✗ Failed to process blob URL: ${error.message}`);
+    return false;
+  }
 }
 
 // Convert local file path to file:// URL
@@ -327,13 +376,26 @@ async function main() {
     return false;
   }
   
+  // Track processed blob URLs to avoid duplicates
+  const processedBlobURLs = new Set();
+  
   // Listen to network requests
   if (config.interceptRequest) {
     page.on('request', async (request) => {
       const url = request.url();
+      console.log("request: = " + url);
+      console.log("request: = " + request.mimeType);
+      // Check for data URI
       const dataURI = extractDataURI(url);
       if (dataURI) {
         await processDataURI(dataURI);
+        return;
+      }
+      
+      // Check for blob URL
+      if (isBlobURL(url) && !processedBlobURLs.has(url)) {
+        processedBlobURLs.add(url);
+        await processBlobURL(page, url, fileIndex);
       }
     });
   }
@@ -342,9 +404,19 @@ async function main() {
   if (config.interceptResponse) {
     page.on('response', async (response) => {
       const url = response.url();
+      //console.log("response: = " + url);
+      
+      // Check for data URI
       const dataURI = extractDataURI(url);
       if (dataURI) {
         await processDataURI(dataURI);
+        return;
+      }
+      
+      // Check for blob URL
+      if (isBlobURL(url) && !processedBlobURLs.has(url)) {
+        processedBlobURLs.add(url);
+        await processBlobURL(page, url, fileIndex);
       }
     });
   }
